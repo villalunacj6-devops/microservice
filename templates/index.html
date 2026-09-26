@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+
+<html lang="en">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>
+        YOLO Emotion Detection
+    </title>
+
+    <link
+        rel="stylesheet"
+        href="{{ url_for('static', filename='style.css') }}"
+    >
+
+</head>
+
+
+<body>
+
+
+<div class="container">
+
+
+    <h1>
+        😊 YOLO Emotion Detection
+    </h1>
+
+
+    <p>
+        Allow camera access to detect
+        facial expressions.
+    </p>
+
+
+    <div class="camera-box">
+
+        <video
+            id="video"
+            autoplay
+            playsinline
+        ></video>
+
+        <canvas
+            id="canvas"
+        ></canvas>
+
+    </div>
+
+
+    <div class="controls">
+
+        <button
+            id="startButton"
+        >
+            Start Camera
+        </button>
+
+
+        <button
+            id="stopButton"
+            disabled
+        >
+            Stop Camera
+        </button>
+
+    </div>
+
+
+    <div id="status">
+
+        Camera is off.
+
+    </div>
+
+
+    <div id="result">
+
+        No face detected.
+
+    </div>
+
+
+</div>
+
+
+<script>
+
+
+const video =
+    document.getElementById(
+        "video"
+    );
+
+
+const canvas =
+    document.getElementById(
+        "canvas"
+    );
+
+
+const startButton =
+    document.getElementById(
+        "startButton"
+    );
+
+
+const stopButton =
+    document.getElementById(
+        "stopButton"
+    );
+
+
+const status =
+    document.getElementById(
+        "status"
+    );
+
+
+const result =
+    document.getElementById(
+        "result"
+    );
+
+
+let stream = null;
+
+let running = false;
+
+let processing = false;
+
+
+/* ==========================================
+   START CAMERA
+========================================== */
+
+startButton.onclick = async function () {
+
+    try {
+
+        stream =
+            await navigator.mediaDevices
+                .getUserMedia({
+
+                    video: {
+                        width: 640,
+                        height: 480
+                    },
+
+                    audio: false
+
+                });
+
+
+        video.srcObject =
+            stream;
+
+
+        running = true;
+
+        startButton.disabled =
+            true;
+
+        stopButton.disabled =
+            false;
+
+
+        status.textContent =
+            "Camera is running.";
+
+
+        processFrame();
+
+
+    } catch (error) {
+
+        status.textContent =
+            "Camera permission denied or unavailable.";
+
+        console.error(error);
+
+    }
+
+};
+
+
+/* ==========================================
+   STOP CAMERA
+========================================== */
+
+stopButton.onclick = function () {
+
+    running = false;
+
+
+    if (stream) {
+
+        stream
+            .getTracks()
+            .forEach(
+                track => track.stop()
+            );
+
+    }
+
+
+    video.srcObject =
+        null;
+
+
+    startButton.disabled =
+        false;
+
+    stopButton.disabled =
+        true;
+
+
+    status.textContent =
+        "Camera is off.";
+
+};
+
+
+/* ==========================================
+   PROCESS CAMERA FRAME
+========================================== */
+
+async function processFrame() {
+
+
+    if (!running) {
+        return;
+    }
+
+
+    if (
+        video.readyState !==
+        video.HAVE_ENOUGH_DATA
+    ) {
+
+        requestAnimationFrame(
+            processFrame
+        );
+
+        return;
+
+    }
+
+
+    if (processing) {
+
+        requestAnimationFrame(
+            processFrame
+        );
+
+        return;
+
+    }
+
+
+    processing = true;
+
+
+    canvas.width =
+        video.videoWidth;
+
+    canvas.height =
+        video.videoHeight;
+
+
+    const context =
+        canvas.getContext("2d");
+
+
+    context.drawImage(
+        video,
+        0,
+        0,
+        canvas.width,
+        canvas.height
+    );
+
+
+    canvas.toBlob(
+        async function (blob) {
+
+            const formData =
+                new FormData();
+
+
+            formData.append(
+                "image",
+                blob,
+                "camera.jpg"
+            );
+
+
+            try {
+
+                const response =
+                    await fetch(
+                        "/detect",
+                        {
+                            method: "POST",
+                            body: formData
+                        }
+                    );
+
+
+                const data =
+                    await response.json();
+
+
+                drawResults(
+                    data.faces || []
+                );
+
+
+            } catch (error) {
+
+                console.error(
+                    error
+                );
+
+            }
+
+
+            processing = false;
+
+
+            setTimeout(
+                function () {
+
+                    requestAnimationFrame(
+                        processFrame
+                    );
+
+                },
+                250
+            );
+
+        },
+        "image/jpeg",
+        0.7
+    );
+
+}
+
+
+/* ==========================================
+   DRAW YOLO RESULTS
+========================================== */
+
+function drawResults(
+    faces
+) {
+
+
+    const context =
+        canvas.getContext("2d");
+
+
+    context.clearRect(
+        0,
+        0,
+        canvas.width,
+        canvas.height
+    );
+
+
+    context.drawImage(
+        video,
+        0,
+        0,
+        canvas.width,
+        canvas.height
+    );
+
+
+    if (
+        faces.length === 0
+    ) {
+
+        result.textContent =
+            "No face detected.";
+
+        return;
+
+    }
+
+
+    result.textContent =
+        `${faces.length} face(s) detected`;
+
+
+    faces.forEach(
+        function (face) {
+
+
+            context.strokeStyle =
+                "lime";
+
+
+            context.lineWidth =
+                3;
+
+
+            context.strokeRect(
+                face.x,
+                face.y,
+                face.width,
+                face.height
+            );
+
+
+            const label =
+                `${face.emotion} ` +
+                `(${face.confidence}%)`;
+
+
+            context.font =
+                "18px Arial";
+
+
+            const textWidth =
+                context.measureText(
+                    label
+                ).width;
+
+
+            context.fillStyle =
+                "lime";
+
+
+            context.fillRect(
+                face.x,
+                face.y - 28,
+                textWidth + 10,
+                28
+            );
+
+
+            context.fillStyle =
+                "black";
+
+
+            context.fillText(
+                label,
+                face.x + 5,
+                face.y - 8
+            );
+
+
+        }
+    );
+
+}
+
+
+</script>
+
+
+</body>
+
+</html>
