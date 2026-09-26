@@ -3,29 +3,16 @@ from flask import Flask, render_template, request, jsonify
 import cv2
 import numpy as np
 
-from ultralytics import YOLO
-from tensorflow.keras.models import load_model
-
 
 app = Flask(__name__)
 
 
 # =====================================================
-# LOAD MODELS
+# GLOBAL MODELS
 # =====================================================
 
-print("Loading YOLO face model...")
-
-face_model = YOLO(
-    "models/yolov11n-face.pt"
-)
-
-
-print("Loading emotion model...")
-
-emotion_model = load_model(
-    "models/emotion_model.h5"
-)
+face_model = None
+emotion_model = None
 
 
 # =====================================================
@@ -41,6 +28,59 @@ EMOTIONS = [
     "Surprise",
     "Neutral"
 ]
+
+
+# =====================================================
+# LOAD MODELS
+# =====================================================
+
+def load_models():
+
+    global face_model
+    global emotion_model
+
+    # ---------------------------------------------
+    # Load YOLO only once
+    # ---------------------------------------------
+
+    if face_model is None:
+
+        print("Loading YOLO face model...", flush=True)
+
+        from ultralytics import YOLO
+
+        face_model = YOLO(
+            "models/yolov11n-face.pt"
+        )
+
+        print(
+            "YOLO face model loaded.",
+            flush=True
+        )
+
+
+    # ---------------------------------------------
+    # Load emotion model only once
+    # ---------------------------------------------
+
+    if emotion_model is None:
+
+        print(
+            "Loading emotion model...",
+            flush=True
+        )
+
+        from tensorflow.keras.models import load_model
+
+        emotion_model = load_model(
+            "models/emotion_model.h5",
+            compile=False
+        )
+
+        print(
+            "Emotion model loaded.",
+            flush=True
+        )
 
 
 # =====================================================
@@ -77,173 +117,267 @@ def health():
 )
 def detect():
 
-    if "image" not in request.files:
+    try:
 
-        return jsonify({
-            "error": "No image received."
-        }), 400
+        # ---------------------------------------------
+        # Load AI models
+        # ---------------------------------------------
 
-
-    file = request.files["image"]
-
-
-    image_bytes = np.frombuffer(
-        file.read(),
-        np.uint8
-    )
+        load_models()
 
 
-    frame = cv2.imdecode(
-        image_bytes,
-        cv2.IMREAD_COLOR
-    )
+        # ---------------------------------------------
+        # Check uploaded image
+        # ---------------------------------------------
+
+        if "image" not in request.files:
+
+            return jsonify({
+                "error": "No image received."
+            }), 400
 
 
-    if frame is None:
-
-        return jsonify({
-            "error": "Invalid image."
-        }), 400
+        file = request.files["image"]
 
 
-    # =================================================
-    # YOLO FACE DETECTION
-    # =================================================
+        # ---------------------------------------------
+        # Convert image to NumPy
+        # ---------------------------------------------
 
-    results = face_model.predict(
-        frame,
-        imgsz=320,
-        conf=0.40,
-        verbose=False
-    )
+        image_bytes = np.frombuffer(
+            file.read(),
+            np.uint8
+        )
 
 
-    detections = []
+        frame = cv2.imdecode(
+            image_bytes,
+            cv2.IMREAD_COLOR
+        )
 
 
-    for result in results:
+        if frame is None:
 
-        if result.boxes is None:
-            continue
-
-
-        boxes = result.boxes.xyxy.cpu().numpy()
+            return jsonify({
+                "error": "Invalid image."
+            }), 400
 
 
-        for box in boxes:
+        # ---------------------------------------------
+        # YOLO FACE DETECTION
+        # ---------------------------------------------
 
-            x1, y1, x2, y2 = box.astype(int)
-
-
-            # Keep coordinates inside image
-
-            x1 = max(0, x1)
-            y1 = max(0, y1)
-
-            x2 = min(
-                frame.shape[1],
-                x2
-            )
-
-            y2 = min(
-                frame.shape[0],
-                y2
-            )
+        results = face_model.predict(
+            source=frame,
+            imgsz=320,
+            conf=0.40,
+            device="cpu",
+            verbose=False
+        )
 
 
-            face = frame[
-                y1:y2,
-                x1:x2
-            ]
+        detections = []
 
 
-            if face.size == 0:
+        # ---------------------------------------------
+        # Process detected faces
+        # ---------------------------------------------
+
+        for result in results:
+
+            if result.boxes is None:
                 continue
 
 
-            # =========================================
-            # PREPARE FACE FOR EMOTION MODEL
-            # =========================================
-
-            gray = cv2.cvtColor(
-                face,
-                cv2.COLOR_BGR2GRAY
+            boxes = (
+                result.boxes.xyxy
+                .cpu()
+                .numpy()
             )
 
 
-            gray = cv2.resize(
-                gray,
-                (48, 48)
-            )
+            for box in boxes:
 
-
-            gray = gray.astype(
-                "float32"
-            ) / 255.0
-
-
-            gray = np.expand_dims(
-                gray,
-                axis=-1
-            )
-
-
-            gray = np.expand_dims(
-                gray,
-                axis=0
-            )
-
-
-            # =========================================
-            # EMOTION PREDICTION
-            # =========================================
-
-            prediction = emotion_model.predict(
-                gray,
-                verbose=0
-            )
-
-
-            emotion_index = int(
-                np.argmax(prediction[0])
-            )
-
-
-            emotion = EMOTIONS[
-                emotion_index
-            ]
-
-
-            confidence = float(
-                prediction[0][emotion_index]
-            ) * 100
-
-
-            detections.append({
-
-                "x": int(x1),
-
-                "y": int(y1),
-
-                "width": int(x2 - x1),
-
-                "height": int(y2 - y1),
-
-                "emotion": emotion,
-
-                "confidence": round(
-                    confidence,
-                    1
+                x1, y1, x2, y2 = (
+                    box.astype(int)
                 )
 
-            })
+
+                # -------------------------------------
+                # Keep coordinates inside image
+                # -------------------------------------
+
+                x1 = max(
+                    0,
+                    x1
+                )
+
+                y1 = max(
+                    0,
+                    y1
+                )
+
+                x2 = min(
+                    frame.shape[1],
+                    x2
+                )
+
+                y2 = min(
+                    frame.shape[0],
+                    y2
+                )
 
 
-    return jsonify({
+                # -------------------------------------
+                # Extract face
+                # -------------------------------------
 
-        "faces": detections
+                face = frame[
+                    y1:y2,
+                    x1:x2
+                ]
 
-    })
+
+                if face.size == 0:
+                    continue
+
+
+                # -------------------------------------
+                # Convert to grayscale
+                # -------------------------------------
+
+                gray = cv2.cvtColor(
+                    face,
+                    cv2.COLOR_BGR2GRAY
+                )
+
+
+                # -------------------------------------
+                # Resize to model input
+                # -------------------------------------
+
+                gray = cv2.resize(
+                    gray,
+                    (48, 48)
+                )
+
+
+                # -------------------------------------
+                # Normalize
+                # -------------------------------------
+
+                gray = (
+                    gray.astype(
+                        "float32"
+                    ) / 255.0
+                )
+
+
+                # -------------------------------------
+                # Add channels
+                # Shape:
+                # (48,48)
+                # →
+                # (48,48,1)
+                # →
+                # (1,48,48,1)
+                # -------------------------------------
+
+                gray = np.expand_dims(
+                    gray,
+                    axis=-1
+                )
+
+
+                gray = np.expand_dims(
+                    gray,
+                    axis=0
+                )
+
+
+                # -------------------------------------
+                # Emotion prediction
+                # -------------------------------------
+
+                prediction = (
+                    emotion_model.predict(
+                        gray,
+                        verbose=0
+                    )
+                )
+
+
+                emotion_index = int(
+                    np.argmax(
+                        prediction[0]
+                    )
+                )
+
+
+                emotion = EMOTIONS[
+                    emotion_index
+                ]
+
+
+                confidence = float(
+                    prediction[0][
+                        emotion_index
+                    ]
+                ) * 100
+
+
+                # -------------------------------------
+                # Save detection
+                # -------------------------------------
+
+                detections.append({
+
+                    "x": int(x1),
+
+                    "y": int(y1),
+
+                    "width": int(
+                        x2 - x1
+                    ),
+
+                    "height": int(
+                        y2 - y1
+                    ),
+
+                    "emotion": emotion,
+
+                    "confidence": round(
+                        confidence,
+                        1
+                    )
+
+                })
+
+
+        # ---------------------------------------------
+        # Return results
+        # ---------------------------------------------
+
+        return jsonify({
+
+            "faces": detections
+
+        })
+
+
+    except Exception as e:
+
+        print(
+            "DETECTION ERROR:",
+            str(e),
+            flush=True
+        )
+
+        return jsonify({
+
+            "error": str(e)
+
+        }), 500
 
 
 # =====================================================
@@ -254,5 +388,6 @@ if __name__ == "__main__":
 
     app.run(
         host="0.0.0.0",
-        port=5000
+        port=5000,
+        debug=False
     )
