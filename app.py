@@ -50,7 +50,7 @@ def load_models():
         from ultralytics import YOLO
 
         face_model = YOLO(
-            "models/yolov11n-face.pt"
+            "models/model.pt"
         )
 
         print(
